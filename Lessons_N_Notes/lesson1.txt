@@ -1,0 +1,214 @@
+Core GPU Design Technical Trends
+=====================================
+
+1. Lots of simple compute units
+	Trade simple control for more compute
+
+2.	Explicitly parallel programming model
+
+3.	GPUs optimize for throughput not Latency
+
+GPUs from the point of view of the software developer
+=======================================================
+
+- Importance of Programming in Parallel
+	i.e Let's say you have an
+		8 core Intel Ivy Bridge Processor
+	  x 8-wide AVX vector operations / core
+	  x 2 Threads / Core  (Hyperthreading)
+	  -------------------------------------
+We get  128-way parallelism
+
+If we run a complete serial C program we'll use less than 1 percent of it's capability
+
+
+
+We are using Heterogeneous Computers
+=====================================
+
+ __________  				__________
+| 		   |  Coprocessor  |		  |
+|	CPU    |_______________|   GPU    |
+| ('HOST') |			   |("DEVICE")|
+|__________|			   |__________|
+	 |							 |
+ __________                 ___________
+|		   |			   |		   |
+|  MEMORY  | 			   |   MEMORY  |
+|__________|			   |___________|
+
+The CPU is in charge
+It is responsible for:
+
+1) DATA CPU -> GPU
+2) DATA GPU -> CPU
+	1) 2)  cuda_memcpy
+3) Allocate GPU memory
+	3) cuda_malloc
+4) Launch kernels on GPU
+
+
+==========================================
+QUIZ: The GPU can do the following:
+==========================================
+1) Initiate data send GPU -> CPU
+2) Respond to CPU request to send data GPU -> CPU
+3) Initiate data request CPU -> GPU
+4) Respond to CPU request to receive data CPU -> GPU
+5) Compute a kernel launched by CPU
+6) Compute a kernel launched by GPU
+
+ANSWERS: 2), 4), 5) 
+Number 6) is currently changing.
+
+
+
+A typical GPU program
+==========================================
+
+1) CPU allocate storage on GPU   (cuda Malloc)
+2) CPU copies input data from CPU -> GPU (cudaMemcpy)
+3) CPU launches kernel(s) on GPU to process the data (kernel launch)
+4) CPU copies the result back to the CPU from the GPU
+
+
+Defining the GPU computation
+==========================================
+
+The BIG IDEA:
+______________
+
+	Kernels look like serial programs.
+	You write your programs as if it run on ===ONE=== thread
+	The GPU will run that program on ===MANY=== Threads
+
+You tell the GPU to launch as many THREADS as you want.
+
+SO the GPU is good at: 
+==========================================
+
+	1)Launching a large number of threads efficiently.
+		If you are not launching lots of threads you are 
+		not using the GPU efficiently
+
+	2)Running a large number of threads in PARALLEL.
+
+GPU code: A high-level view
+==========================================
+
+CPU
+	- Allocate memory
+	- Copy data to/from GPU
+	- Launch kernel  ==> SPECIFIES THE DEGREE OF PARALLELISM
+
+GPU
+	- Looks like a serial program
+
+
+So you write your kernel to look like it will run on one thread, 
+then launch multiple threads.
+
+Latency might increase for a single operation but through put increases.
+
+
+Configuring the Kernel Launch
+==========================================
+
+When you lauch the kernel you specify the number of block and the number of threads.
+
+squre <<< 1, 64 >>> (d_out, d_in)
+		 /	   \
+	Number 		Number of threads
+	of Block
+
+What we need to know about the hardware
+
+1) Can run many block at once
+2) Maximum number of threads/block   
+		512  ( old GPUs )
+		1024 ( newer GPUs )
+
+So 128 Threads?
+	square <<< 1, 128 >>> ( ... )
+
+1280 Threads?
+		square <<< 10, 128 >>> ( ... )
+or 		square <<< 5 , 256 >>> ( ... )
+NO 		square <<< 1 , 1280>>> ( ... )  too MANY THREADS/Block
+
+How do these threads map per block??
+say  1,128
+	 _____ _____         _____
+	| 128 | 128 | ..... | 128 |
+
+But we can also do multidimensional layouts 1D 2D and 3D
+
+Let's say we want to work on picture with pixels 128 x 128
+	
+	  128
+	 _____
+128 |	  |
+	|_____|
+
+We can do 
+
+	 ___________
+	|___128x1___|
+	|___128x1___|
+	|___128x1___|  
+	|     .     |  } Everything is 1x128 until we get a 128 x 128 
+	|     .     |
+	|_____._____|
+
+OR we can do an 8 x 8 grid of blocks with each block having 1t threads
+
+		8
+	  ______________
+  	 |__|16......	|	
+  	 |16|			|
+  8	 |
+  	 |
+  	 |
+  	 .........
+
+ Configuring the Kernel Launch
+ ==========================================
+
+ Kernel <<< GRID OF BLOCKS , BLOCK OF THREADS >>> ( ... )
+ 				 |					|
+ 				 v 					V
+ 			1, 2, or 3D		   1, 2, or 3D
+
+ We can specify the dimensionality of each, or it defaults to 1
+
+ we can specify dimensionaly using:
+ 	dim3( x, y, z )
+
+ 	dim3( w, 1, 1 ) == dim3( w ) == w  // so y,z, defaults to 1
+
+ Sooo
+
+ 	square <<< 1, 64 >>>
+
+ 	Is the same as
+
+ 	square <<< dim3( 1,1,1 ), dim3 ( 64,1,1 ) >>>
+
+
+ Configuring the Kernel Launch
+ ==========================================
+
+ Kernel <<< GRID OF BLOCK, BLOCK OF THREADS >>> ( ... )
+
+ square <<< dim3( bx, by, bz ), dim3( tx, ty, tz ), shmem >>> ( ... )
+
+ Each thread know it's thread index in each dimension
+
+ threadIdx : 	thread within block
+ 		threadIdx.x		threadIdx.y
+
+ block Dim :		size of a block
+
+ block Idx :		block within grid
+
+ grid Dim  :		size of grid	
